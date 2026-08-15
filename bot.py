@@ -2,10 +2,9 @@ import os
 import logging
 import asyncio
 import re
-import html
 from typing import List, Dict, Optional
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
 import aiohttp
 from bs4 import BeautifulSoup
@@ -82,7 +81,7 @@ LEAGUES = {
 # ==================== DATA STORAGE ====================
 subscribed_chats: List[int] = []
 user_preferences: Dict[int, str] = {}
-cache: Dict[str, Dict] = {}
+cache: Dict[str, tuple] = {}
 CACHE_DURATION = 300  # 5 minutes
 
 # ==================== SCRAPER FUNCTIONS ====================
@@ -278,7 +277,270 @@ Check the latest league standings instantly and stay updated!
             reply_markup=reply_markup
         )
 
-# ... (all other commands remain the same - standings_command, leagues_command, etc.)
+async def standings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show standings for user's preferred league or default"""
+    chat_id = update.effective_chat.id
+    preferred = user_preferences.get(chat_id, "premier-league")
+    
+    await update.message.reply_text(f"📊 Fetching {LEAGUES[preferred]['name']} standings...")
+
+    standings = await fetch_standings(preferred)
+    if standings:
+        message = format_standings(standings, LEAGUES[preferred]['name'])
+        keyboard = [
+            [InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_{preferred}")],
+            [InlineKeyboardButton("📊 Change League", callback_data="select_league")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(message, parse_mode="Markdown", reply_markup=reply_markup)
+    else:
+        await update.message.reply_text("❌ Failed to fetch standings. Please try again later.")
+
+async def leagues_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """List all available leagues"""
+    message = "🏆 **Available Leagues:**\n\n"
+    for key, league in LEAGUES.items():
+        message += f"{league['icon']} **{league['name']}**\n"
+    
+    message += "\n📊 Use /select to choose a league or /standings to view the default."
+
+    keyboard = [[InlineKeyboardButton("📊 Select League", callback_data="select_league")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(message, parse_mode="Markdown", reply_markup=reply_markup)
+
+async def select_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show league selection menu"""
+    keyboard = []
+    row = []
+    for key, league in LEAGUES.items():
+        row.append(InlineKeyboardButton(
+            f"{league['icon']} {league['name'].split(' ')[1] if len(league['name'].split(' ')) > 1 else league['name']}",
+            callback_data=f"select_{key}"
+        ))
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+
+    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "📊 **Select a League:**\n\nChoose a league to view its standings.",
+        parse_mode="Markdown",
+        reply_markup=reply_markup
+    )
+
+async def refresh_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Force refresh standings data"""
+    chat_id = update.effective_chat.id
+    preferred = user_preferences.get(chat_id, "premier-league")
+    
+    # Clear cache
+    cache_key = f"standings_{preferred}"
+    if cache_key in cache:
+        del cache[cache_key]
+    
+    await update.message.reply_text("🔄 Refreshing standings...")
+    await standings_command(update, context)
+
+async def subscribe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Subscribe to automatic updates"""
+    chat_id = update.effective_chat.id
+    if chat_id not in subscribed_chats:
+        subscribed_chats.append(chat_id)
+        await update.message.reply_text(
+            "✅ **Subscription activated!**\n\n"
+            "You'll receive automatic league standings updates every 30 minutes.\n"
+            "Use /unsubscribe to stop notifications."
+        )
+    else:
+        await update.message.reply_text("ℹ️ You're already subscribed!")
+
+async def unsubscribe_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unsubscribe from automatic updates"""
+    chat_id = update.effective_chat.id
+    if chat_id in subscribed_chats:
+        subscribed_chats.remove(chat_id)
+        await update.message.reply_text("✅ **Subscription cancelled!**")
+    else:
+        await update.message.reply_text("ℹ️ You're not subscribed.")
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show help message"""
+    help_text = """📖 **Help - League Standing Checker**
+
+**Commands:**
+/start - Welcome menu with video
+/standings - View live league standings
+/leagues - List all available leagues
+/select - Choose a league to view
+/refresh - Force refresh data
+/subscribe - Enable auto-updates
+/unsubscribe - Disable auto-updates
+/help - This help message
+/about - About this bot
+
+**How to use:**
+1️⃣ Send /standings to see your preferred league
+2️⃣ Use /select to change your preferred league
+3️⃣ Subscribe to get automatic updates every 30 minutes
+
+**Leagues Available:**
+• 🇬🇧 Premier League
+• 🇪🇸 La Liga
+• 🇮🇹 Serie A
+• 🇩🇪 Bundesliga
+• 🇫🇷 Ligue 1
+• 🇵🇹 Primeira Liga
+• 🇳🇱 Eredivisie
+• 🏆 Champions League
+
+⚡ **Features:**
+• Live Standings
+• All Major Leagues
+• Fast & Accurate
+• Instant Updates
+"""
+
+    await update.message.reply_text(help_text, parse_mode="Markdown")
+
+async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """About this bot"""
+    about_text = """⚽ **About League Standing Checker**
+
+A real-time league standings aggregator that fetches live tables from public sources.
+
+🌍 **Coverage:** 8 top European leagues
+📊 **Data:** Position, Team, Played, W/D/L, Goals, GD, Points
+🔄 **Updates:** Real-time with 5-minute cache
+📱 **Platform:** Telegram Bot
+
+**Features:**
+• No API keys required
+• Automatic updates for subscribers
+• League selection
+• Clean, formatted tables
+• Fast and reliable
+
+Built with ❤️ for football fans worldwide ⚽
+
+🤖 Bot: @YourBotUsername
+"""
+
+    await update.message.reply_text(about_text, parse_mode="Markdown")
+
+# ==================== CALLBACK HANDLERS ====================
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle inline button clicks"""
+    query = update.callback_query
+    await query.answer()
+    chat_id = update.effective_chat.id
+
+    if query.data == "view_standings":
+        preferred = user_preferences.get(chat_id, "premier-league")
+        await query.message.reply_text(f"📊 Fetching {LEAGUES[preferred]['name']} standings...")
+        standings = await fetch_standings(preferred)
+        if standings:
+            message = format_standings(standings, LEAGUES[preferred]['name'])
+            keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_{preferred}")],
+                [InlineKeyboardButton("📊 Change League", callback_data="select_league")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.message.reply_text(message, parse_mode="Markdown", reply_markup=reply_markup)
+        else:
+            await query.message.reply_text("❌ Failed to fetch standings. Please try again.")
+
+    elif query.data == "select_league":
+        keyboard = []
+        row = []
+        for key, league in LEAGUES.items():
+            row.append(InlineKeyboardButton(
+                f"{league['icon']} {league['name']}",
+                callback_data=f"select_{key}"
+            ))
+            if len(row) == 2:
+                keyboard.append(row)
+                row = []
+        if row:
+            keyboard.append(row)
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_menu")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.message.edit_text(
+            "📊 **Select a League:**\n\nChoose a league to view its standings.",
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
+
+    elif query.data.startswith("select_"):
+        league_key = query.data.replace("select_", "")
+        user_preferences[chat_id] = league_key
+        league = LEAGUES[league_key]
+        await query.message.reply_text(f"✅ **League set to: {league['name']}**\n\nUse /standings to view the table.")
+        # Show the select menu again
+        await select_command(update, context)
+
+    elif query.data.startswith("refresh_"):
+        league_key = query.data.replace("refresh_", "")
+        cache_key = f"standings_{league_key}"
+        if cache_key in cache:
+            del cache[cache_key]
+        await query.message.reply_text("🔄 Refreshing standings...")
+        standings = await fetch_standings(league_key)
+        if standings:
+            message = format_standings(standings, LEAGUES[league_key]['name'])
+            keyboard = [
+                [InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_{league_key}")],
+                [InlineKeyboardButton("📊 Change League", callback_data="select_league")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.message.reply_text(message, parse_mode="Markdown", reply_markup=reply_markup)
+
+    elif query.data == "subscribe":
+        if chat_id not in subscribed_chats:
+            subscribed_chats.append(chat_id)
+            await query.message.reply_text("✅ **Subscription activated!**")
+        else:
+            await query.message.reply_text("ℹ️ You're already subscribed!")
+
+    elif query.data == "help":
+        await help_command(update, context)
+
+    elif query.data == "back_to_menu":
+        # Re-send welcome with video
+        await start(update, context)
+
+# ==================== AUTO-UPDATE JOB ====================
+async def auto_send_standings(context: ContextTypes.DEFAULT_TYPE):
+    """Send standings to all subscribers"""
+    if not subscribed_chats:
+        return
+
+    logger.info(f"📊 Sending auto-updates to {len(subscribed_chats)} subscribers")
+
+    for chat_id in subscribed_chats:
+        try:
+            preferred = user_preferences.get(chat_id, "premier-league")
+            standings = await fetch_standings(preferred)
+            if standings:
+                message = format_standings(standings, LEAGUES[preferred]['name'])
+                keyboard = [
+                    [InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_{preferred}")],
+                    [InlineKeyboardButton("📊 Change League", callback_data="select_league")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=message,
+                    parse_mode="Markdown",
+                    reply_markup=reply_markup
+                )
+                await asyncio.sleep(1)
+        except Exception as e:
+            logger.error(f"Error sending to {chat_id}: {e}")
 
 # ==================== ERROR HANDLER ====================
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -313,20 +575,26 @@ async def main():
     application.add_handler(CommandHandler("unsubscribe", unsubscribe_command))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("about", about_command))
+
+    # Add callback handler
     application.add_handler(CallbackQueryHandler(button_callback))
+
+    # Add error handler
     application.add_error_handler(error_handler)
 
-    # Setup job queue
+    # Setup job queue for auto-updates
     job_queue = application.job_queue
     if job_queue:
         job_queue.run_repeating(
             auto_send_standings,
-            interval=1800,
+            interval=1800,  # 30 minutes
             first=30
         )
         logger.info("⏰ Auto-update job scheduled (every 30 minutes)")
+    else:
+        logger.warning("⚠️ JobQueue not available - auto-updates disabled")
 
-    # Start with retry
+    # Start the bot with retry logic
     max_retries = 5
     retry_delay = 5
     
@@ -339,7 +607,7 @@ async def main():
                 application.bot.delete_webhook(drop_pending_updates=True),
                 timeout=30.0
             )
-            logger.info("✅ Webhook removed")
+            logger.info("✅ Webhook removed, using polling mode")
 
             await asyncio.wait_for(application.start(), timeout=60.0)
             await asyncio.wait_for(
