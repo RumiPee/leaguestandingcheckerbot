@@ -17,6 +17,10 @@ if not TOKEN:
     logging.error("❌ BOT_TOKEN environment variable is not set!")
     exit(1)
 
+# ==================== VIDEO CONFIGURATION ====================
+# Video file ID from the JSON you provided
+WELCOME_VIDEO_FILE_ID = "BAACAgQAAxkBAAFR6rZqgOKuxBwbqZmSAcvMZZkXcUD6BAACMiEAAlAyAAFQmUO9QEni8PY9BA"
+
 # ==================== LOGGING ====================
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -218,14 +222,15 @@ def format_standings(standings: List[Dict], league_name: str) -> str:
 
 # ==================== BOT COMMANDS ====================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Welcome message"""
+    """Welcome message with video"""
     chat_id = update.effective_chat.id
     if chat_id not in subscribed_chats:
         subscribed_chats.append(chat_id)
 
+    # Welcome text
     welcome_text = """🏆 **Welcome to League Standing Checker!**
 
-Get real-time league standings from the top football leagues around the world.
+Check the latest league standings instantly and stay updated!
 
 📊 **Available Leagues:**
 • 🏴󠁧󠁢󠁥󠁮󠁧󠁿 Premier League
@@ -237,12 +242,19 @@ Get real-time league standings from the top football leagues around the world.
 • 🇳🇱 Eredivisie
 • 🏆 Champions League
 
+⚡ **Features:**
+• 🔴 Live Standings
+• 🏆 All Major Leagues
+• ⚡ Fast & Accurate
+• 🔄 Instant Updates
+
 📌 **Commands:**
-/start - Welcome menu
 /standings - View live league standings
 /leagues - List all available leagues
 /select - Choose a league to view
 /refresh - Force refresh data
+/subscribe - Enable auto-updates
+/unsubscribe - Disable auto-updates
 /help - Help & info
 /about - About this bot
 
@@ -257,7 +269,26 @@ Get real-time league standings from the top football leagues around the world.
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_text(welcome_text, parse_mode="Markdown", reply_markup=reply_markup)
+    # ===== SEND VIDEO WITH CAPTION =====
+    try:
+        await update.message.reply_video(
+            video=WELCOME_VIDEO_FILE_ID,
+            caption=welcome_text,
+            parse_mode="Markdown",
+            reply_markup=reply_markup,
+            supports_streaming=True,  # Allows the video to be streamed
+            height=1024,
+            width=576
+        )
+        logger.info(f"✅ Welcome video sent to {chat_id}")
+    except Exception as e:
+        logger.error(f"Error sending video: {e}")
+        # Fallback: send text only if video fails
+        await update.message.reply_text(
+            welcome_text,
+            parse_mode="Markdown",
+            reply_markup=reply_markup
+        )
 
 async def standings_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show standings for user's preferred league or default"""
@@ -355,7 +386,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """📖 **Help - League Standing Checker**
 
 **Commands:**
-/start - Welcome menu
+/start - Welcome menu with video
 /standings - View live league standings
 /leagues - List all available leagues
 /select - Choose a league to view
@@ -379,6 +410,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • 🇵🇹 Primeira Liga
 • 🇳🇱 Eredivisie
 • 🏆 Champions League
+
+⚡ **Features:**
+• Live Standings
+• All Major Leagues
+• Fast & Accurate
+• Instant Updates
 """
 
     await update.message.reply_text(help_text, parse_mode="Markdown")
@@ -403,7 +440,7 @@ A real-time league standings aggregator that fetches live tables from public sou
 
 Built with ❤️ for football fans worldwide ⚽
 
-🤖 Bot: @League_Standing_Bot
+🤖 Bot: @YourBotUsername
 """
 
     await update.message.reply_text(about_text, parse_mode="Markdown")
@@ -485,6 +522,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await help_command(update, context)
 
     elif query.data == "back_to_menu":
+        # Re-send welcome with video
         await start(update, context)
 
 # ==================== AUTO-UPDATE JOB ====================
@@ -526,6 +564,7 @@ async def main():
     """Start the bot"""
     logger.info("🏆 Starting League Standing Checker Bot...")
     logger.info(f"📊 {len(LEAGUES)} leagues configured")
+    logger.info("🎬 Welcome video configured")
 
     # Create application
     application = Application.builder().token(TOKEN).build()
